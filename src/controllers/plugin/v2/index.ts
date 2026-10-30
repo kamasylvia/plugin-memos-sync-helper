@@ -10,6 +10,7 @@ import {MemosApiServiceV2} from "@/controllers/memos/v2";
 import {DataSaveV2} from "@/controllers/plugin/v2/data-save";
 import {API_VERSION} from "@/constants/memos";
 import {DataHandleV0_24} from "@/controllers/plugin/v2/data-handle-v0_24";
+import {ImgBedService} from "@/controllers/imgbed";
 
 
 export class PluginV2 {
@@ -78,5 +79,14 @@ export class PluginV2 {
         await DataSaveV2.run(resHandleData);
 
         debugMessage(pluginConfigData.debug.isDebug, "数据同步完成", "", true);
+
+        // 图床后台上传：同步主流程已完成，不阻塞；成功后替换文档中的本地链接
+        let pending = resHandleData.pendingImgbedResources;
+        if (!isEmptyValue(pending) && pending.length > 0) {
+            debugMessage(pluginConfigData.debug.isDebug, `图床后台上传开始（${pending.length} 个资源）`, "", true);
+            void ImgBedService.uploadInBackground(pending).then(() => {
+                debugMessage(pluginConfigData.debug.isDebug, "图床后台上传结束", "", true);
+            });
+        }
     }
 }

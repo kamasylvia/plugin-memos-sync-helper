@@ -16,10 +16,14 @@ import {ImgBedService} from "@/controllers/imgbed";
 export class DataHandleV2 extends DataHandleBase{
 
     /**
+     * 待后台上传图床的资源（同步主流程不等待上传完成）
+     */
+    public pendingImgbedResources: IResourceV2[] = [];
+
+    /**
      * 图床链接映射是否有新增（run 结束后由调用方持久化）
      */
     public imgbedLinksChanged: boolean = false;
-
     async handelMemoV0240(memo: any) {
         debugMessage(pluginConfigData.debug.isDebug, "开始处理 Memos", memo);
 
@@ -96,9 +100,9 @@ export class DataHandleV2 extends DataHandleBase{
     protected async handleResources(memo: IMemoV2, contents: IContents): Promise<void> {
         let resources = MemosApiServiceV2.normalizeResources(memo);
 
-        // 图床模式：命中的资源先下载并上传图床，文档内直接引用图床外链；
-        // 已有持久化映射的资源直接复用外链（全量重建时不重复上传）；
-        // 上传失败的资源保留在本地落盘列表，行为与旧版一致
+        // 图床模式：已有持久化映射的资源直接复用外链（全量重建时不重复上传）；
+        // 其余命中的资源只收集到待上传清单，同步主流程先走本地落盘，
+        // 图床上传在后台进行，成功后再替换文档中的链接（见 ImgBedService.uploadInBackground）。
         if (pluginConfigData.imgbed?.enabled) {
             if (!pluginConfigData.imgbed.links) {
                 pluginConfigData.imgbed.links = {};
@@ -112,21 +116,7 @@ export class DataHandleV2 extends DataHandleBase{
                     this.uploadedResourceLinks.set(resource.name, persistedLink);
                     continue;
                 }
-                try {
-                    let response = await MemosApiServiceV2.downloadResource(resource);
-                    if (isEmptyValue(response) || !response.ok) {
-                        continue;
-                    }
-                    let blob = await response.blob();
-                    let link = await ImgBedService.upload(blob, resource.filename);
-                    if (!isEmptyValue(link)) {
-                        this.uploadedResourceLinks.set(resource.name, link);
-                        pluginConfigData.imgbed.links[resource.name] = link;
-                        this.imgbedLinksChanged = true;
-                    }
-                } catch (error) {
-                    debugMessage(pluginConfigData.debug.isDebug, "图床上传失败，该资源回退本地落盘", error);
-                }
+                this.pendingImgbedResources.push(resource);
             }
         }
 
@@ -167,7 +157,8 @@ export class DataHandleV2 extends DataHandleBase{
             oldMemos: data.old,
             newMemos: dh.newMemos,
             uploadedResourceNames: Array.from(dh.uploadedResourceLinks.keys()),
-            imgbedLinksChanged: dh.imgbedLinksChanged
+            imgbedLinksChanged: dh.imgbedLinksChanged,
+            pendingImgbedResources: dh.pendingImgbedResources
         }
 
         debugMessage(pluginConfigData.debug.isDebug, "数据处理结果", result);

@@ -1,7 +1,10 @@
 import {Requests} from "@/utils/requests";
 import {pluginConfigData} from "@/index";
-import {debugMessage} from "@/utils";
+import {debugMessage, isEmptyValue} from "@/utils";
 import {IResourceV2} from "@/types/memos/v2";
+import {MemosApiServiceV2} from "@/controllers/memos/v2";
+import {getBlockKramdown, putFile, sql, updateBlock} from "@/controllers/siyuan/api";
+import {STORAGE_NAME} from "@/constants";
 
 
 
@@ -117,6 +120,92 @@ export class ImgBedService {
             this.lastError = String(error?.message || error);
             debugMessage(pluginConfigData.debug.isDebug, "图床上传异常，回退本地落盘", error);
             return null;
+        }
+    }
+
+    /**
+     * 后台上传图床：同步主流程已完成（本地落盘 + 文档写入），这里逐个上传，
+     * 成功后把文档中的本地资源链接替换为图床外链。调用方不得 await。
+     * @param resources - 待上传的 Memos 资源
+     */
+    static async uploadInBackground(resources: IResourceV2[]): Promise<void> {
+        const imgbed = pluginConfigData.imgbed;
+        if (!imgbed?.enabled || !resources || resources.length === 0) {
+            return;
+        }
+        if (!imgbed.links) {
+            imgbed.links = {};
+        }
+        let changed = false;
+        for (let resource of resources) {
+            try {
+                // 去重：前序同步可能已上传过
+                if (!isEmptyValue(imgbed.links[resource.name])) {
+                    continue;
+                }
+                let response = await MemosApiServiceV2.downloadResource(resource);
+                if (isEmptyValue(response) || !response.ok) {
+                    continue;
+                }
+                let blob = await response.blob();
+                let link = await this.upload(blob, resource.filename);
+                if (isEmptyValue(link)) {
+                    continue;
+                }
+                imgbed.links[resource.name] = link;
+                changed = true;
+                await this.replaceLocalLinks(resource, link);
+            } catch (error) {
+                debugMessage(pluginConfigData.debug.isDebug, "后台图床上传失败，保留本地链接", error);
+            }
+        }
+        if (changed) {
+            try {
+                let cfgJson = JSON.stringify(pluginConfigData);
+                await putFile(`/data/storage/petal/plugin-memos-sync-helper/${STORAGE_NAME}`, false, new Blob([cfgJson], {type: "application/json"}));
+            } catch (error) {
+                debugMessage(pluginConfigData.debug.isDebug, "后台图床链接映射持久化失败", error);
+            }
+        }
+    }
+
+    /**
+     * 把引用了该资源本地路径的块替换为图床外链
+     */
+    private static async replaceLocalLinks(resource: IResourceV2, link: string): Promise<void> {
+        // 本地落盘路径形如 assets/memos/<memoId>/<filename>，SQL 按文件名模糊匹配
+        let safeName = (resource.filename || "").replace(/'/g, "''");
+        if (isEmptyText(safeName)) {
+            return;
+        }
+        let rows: Array<{id: string}> = [];
+        try {
+            rows = await sql(`SELECT id FROM blocks WHERE markdown LIKE '%${safeName}%' AND type IN ('p', 'i', 'v', 'a')`);
+        } catch (error) {
+            debugMessage(pluginConfigData.debug.isDebug, "后台图床链接替换：SQL 查询失败", error);
+            return;
+        }
+        if (isEmptyValue(rows) || rows.length === 0) {
+            return;
+        }
+        for (let row of rows) {
+            try {
+                let kramdown = await getBlockKramdown(row.id);
+                let md = kramdown?.kramdown ?? "";
+                if (md.indexOf(safeName) < 0) {
+                    continue;
+                }
+                // 只替换本地 assets 路径，保留已是外链的部分不动
+                let updated = md.replace(/\(assets\/[^)]*\/([^)]*)\)/g, (match, tail) => {
+                    return tail === resource.filename ? `(${link})` : match;
+                });
+                if (updated !== md) {
+                    await updateBlock("markdown", updated, row.id);
+                    debugMessage(pluginConfigData.debug.isDebug, `后台图床链接已替换: ${resource.filename} -> ${link}`);
+                }
+            } catch (error) {
+                debugMessage(pluginConfigData.debug.isDebug, "后台图床链接替换失败", error);
+            }
         }
     }
 }

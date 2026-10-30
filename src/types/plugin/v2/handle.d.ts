@@ -23,5 +23,9 @@ export interface IResDataHandleRunV2 {
     /**
      * 图床链接映射是否有新增，由调用方持久化
      */
-    imgbedLinksChanged: boolean
+    imgbedLinksChanged: boolean,
+    /**
+     * 待后台上传图床的资源（同步主流程不等待）
+     */
+    pendingImgbedResources?: IResourceV2[]
 }
