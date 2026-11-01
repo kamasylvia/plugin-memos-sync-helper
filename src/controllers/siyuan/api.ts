@@ -24,9 +24,32 @@ import {
 import {PLUGIN_NAME} from "@/constants";
 
 
+// 内核在后台重建「文档元数据索引」(升级后首次启动、大改动后)时会拒绝写事务,
+// 返回 code!=0 且 msg 为 document metadata is not ready;该窗口通常几秒到几分钟。
+// 对这一确定性暂态错误做自动退避重试,其余错误保持原有语义(code!=0 → null)。
+const DOCUMENT_METADATA_NOT_READY = "document metadata is not ready";
+const METADATA_RETRY_MAX = 10;
+const METADATA_RETRY_DELAY_MS = 3000;
+
+async function requestWithMetadataRetry(url: string, data?: any): Promise<IWebSocketData | null> {
+    for (let attempt = 0; attempt <= METADATA_RETRY_MAX; attempt++) {
+        let response: IWebSocketData = await fetchSyncPost(url, data);
+        if (response.code === 0) {
+            return response;
+        }
+        const message = String(response.msg || "");
+        if (!message.includes(DOCUMENT_METADATA_NOT_READY) || attempt === METADATA_RETRY_MAX) {
+            console.warn(`siyuan api [${url}] failed: ${message}`);
+            return null;
+        }
+        await new Promise(resolve => setTimeout(resolve, METADATA_RETRY_DELAY_MS));
+    }
+    return null;
+}
+
 export async function request(url: string, data?: any) {
-    let response: IWebSocketData = await fetchSyncPost(url, data);
-    return response.code === 0 ? response.data : null;
+    const response = await requestWithMetadataRetry(url, data);
+    return response ? response.data : null;
 }
 
 

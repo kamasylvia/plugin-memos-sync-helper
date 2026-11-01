@@ -573,7 +573,14 @@ export async function main(plugin: InstanceType<typeof PluginMemosSyncHelper>) {
 
     } catch (error) {
         Sync.syncError();
-        await pushErrMsg(`${STORAGE_NAME}：${error}`);
+        const message = String((error as any)?.message || error);
+        if (message.includes("document metadata is not ready")) {
+            // 内核正在后台重建文档元数据索引(升级后首次启动/大改动后),
+            // 重试多次仍未就绪才走到这里;提示用户稍后再试而不是暴露内部错误
+            await pushErrMsg("内核正在重建文档索引(文档元数据未就绪),本次同步已中止,请稍等片刻后重新点同步");
+        } else {
+            await pushErrMsg(`${STORAGE_NAME}：${error}`);
+        }
         throw new Error(error);
     } finally {
         // 调试模式下将本次同步日志落盘，便于不开开发者工具时取证
