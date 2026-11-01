@@ -363,6 +363,23 @@
         </Item>
         {/if}
         <Item
+                title="上报引用快照"
+                text="同步后向图床上报全库图床外链集合（引用登记），供其识别孤儿文件；关闭不影响上传"
+                isShow={true}
+        >
+            <Input
+                    slot="input"
+                    type={itemType.checkbox}
+                    settingKey="ImgbedReportReferences"
+                    settingValue={config.imgbed.reportReferences}
+                    on:changed={e => {
+                        config.imgbed.reportReferences = e.detail.value;
+                        updated();
+                    }
+                }
+            />
+        </Item>
+        <Item
                 title="图床连通性检验"
                 text="上传探针文件验证图床是否可用"
                 isShow={true}

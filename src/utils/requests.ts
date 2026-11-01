@@ -286,6 +286,26 @@ export class Requests {
     }
 
     /**
+     * 向任意外部地址发送 POST(带自定义认证头);直连被浏览器策略拦截时回落内核代理。
+     * 与 post() 的区别:post() 面向 Memos API(走默认凭证);本方法面向第三方服务。
+     * @param url - 完整目标地址
+     * @param body - 已序列化的请求体(字符串)
+     * @param headers - 认证/内容类型头
+     */
+    static async postTo(url: string, body: string, headers: Record<string, string>): Promise<Response> {
+        try {
+            return await fetch(url, {
+                method: METHOD.POST,
+                body,
+                headers
+            });
+        } catch (error) {
+            debugMessage(pluginConfigData.debug.isDebug, "直连请求失败，回落内核代理", error);
+            return await this.forwardViaKernel(url, METHOD.POST, body, headers["Content-Type"], headers);
+        }
+    }
+
+    /**
      * 发送 PUT 请求
      * @param pathName - 请求地址
      * @param data - 请求参数

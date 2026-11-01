@@ -43,6 +43,7 @@ export const DEFAULT_CONFIG: IConfig = {
         token: "",
         resourceTypes: ["image", "video"],
         customExtensions: "",
+        reportReferences: true,
         links: {}
     }
 }

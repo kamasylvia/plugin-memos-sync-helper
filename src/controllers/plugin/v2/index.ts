@@ -86,7 +86,12 @@ export class PluginV2 {
             debugMessage(pluginConfigData.debug.isDebug, `图床后台上传开始（${pending.length} 个资源）`, "", true);
             void ImgBedService.uploadInBackground(pending).then(() => {
                 debugMessage(pluginConfigData.debug.isDebug, "图床后台上传结束", "", true);
+                // 引用登记：后台链接替换完成后再上报，快照包含刚写入的外链
+                void ImgBedService.reportReferences();
             });
+        } else {
+            // 无待上传资源也上报：文档可能被手工增删，快照应反映全库当前状态
+            void ImgBedService.reportReferences();
         }
     }
 }

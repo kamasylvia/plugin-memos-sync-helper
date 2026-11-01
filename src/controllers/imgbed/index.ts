@@ -170,6 +170,73 @@ export class ImgBedService {
     }
 
     /**
+     * 引用登记上报(fork,图床 issue #1):同步流程结束后,把全库文档中指向
+     * 图床的外链集合以 siyuan 源上报全量快照,供图床识别孤儿文件。
+     * 幂等全量覆盖;失败只记日志,不影响同步主流程。调用方不必 await。
+     */
+    static async reportReferences(): Promise<void> {
+        const imgbed = pluginConfigData.imgbed;
+        if (!imgbed?.enabled || imgbed.reportReferences === false || isEmptyText(imgbed.uploadUrl)) {
+            return;
+        }
+        try {
+            // 文档中可能混用外链前缀(publicUrl)与上传前缀(uploadUrl),两个 host 都收集
+            const hosts: string[] = [];
+            for (const candidate of [imgbed.publicUrl, imgbed.uploadUrl]) {
+                try {
+                    const host = new URL(candidate.trim()).host;
+                    if (host && !hosts.includes(host)) hosts.push(host);
+                } catch (error) {
+                    // 无效配置项跳过
+                }
+            }
+            if (hosts.length === 0) {
+                return;
+            }
+
+            const links = new Set<string>();
+            for (const host of hosts) {
+                const safeHost = host.replace(/'/g, "''");
+                let rows: Array<{ markdown?: string }> = [];
+                try {
+                    rows = await sql(`SELECT markdown FROM blocks WHERE markdown LIKE '%${safeHost}%'`);
+                } catch (error) {
+                    debugMessage(pluginConfigData.debug.isDebug, "引用登记上报：SQL 查询失败", error);
+                    continue;
+                }
+                const escaped = host.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+                const pattern = new RegExp(`https?://${escaped}/file/[^\\s)\\]}"\\']+`, "g");
+                for (const row of rows) {
+                    const markdown = row.markdown || "";
+                    for (const match of markdown.matchAll(pattern)) {
+                        links.add(match[0].replace(/[.,;:!）\u3002\uff0c]+$/, ""));
+                    }
+                }
+            }
+
+            const uploadHost = imgbed.uploadUrl.trim().replace(/\/+$/, "");
+            const headers: Record<string, string> = { "Content-Type": "application/json" };
+            const token = (imgbed.token || "").trim();
+            if (token.length > 0) {
+                headers["Authorization"] = `Bearer ${token}`;
+            }
+            const response = await Requests.postTo(
+                `${uploadHost}/api/manage/references/siyuan`,
+                JSON.stringify({ urls: [...links] }),
+                headers
+            );
+            if (!response.ok) {
+                debugMessage(pluginConfigData.debug.isDebug, `引用登记上报失败: HTTP ${response.status}`);
+                return;
+            }
+            const result = await response.json();
+            debugMessage(pluginConfigData.debug.isDebug, `引用登记快照已上报: ${result?.stored ?? 0} 条引用`, "", true);
+        } catch (error) {
+            debugMessage(pluginConfigData.debug.isDebug, "引用登记上报异常(不影响同步)", error);
+        }
+    }
+
+    /**
      * 把引用了该资源本地路径的块替换为图床外链
      */
     private static async replaceLocalLinks(resource: IResourceV2, link: string): Promise<void> {
